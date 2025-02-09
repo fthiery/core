@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import temescal
@@ -18,6 +19,8 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -76,6 +79,8 @@ class LGDevice(MediaPlayerEntity):
         self._bass = 0
         self._treble = 0
         self._device = None
+        self._available_logged = False
+        self._unavailable_logged = False
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, unique_id)}, name=host
         )
@@ -84,10 +89,29 @@ class LGDevice(MediaPlayerEntity):
         """Register the callback after hass is ready for it."""
         await self.hass.async_add_executor_job(self._connect)
 
+    @property
+    def available(self) -> bool:
+        """Return if the media_player is available."""
+        if self._device is not None:
+            if self._device.connected and not self._available_logged:
+                _LOGGER.info("Soundbar is available")
+                self._available_logged = True
+                self._unavailable_logged = False
+
+            if not self._device.connected and not self._unavailable_logged:
+                _LOGGER.info("Soundbar is gone unavailable")
+                self._unavailable_logged = True
+                self._available_logged = False
+            return self._device.connected
+        return False
+
     def _connect(self) -> None:
         """Perform the actual devices setup."""
         self._device = temescal.temescal(
-            self._host, port=self._port, callback=self.handle_event
+            self._host,
+            port=self._port,
+            callback=self.handle_event,
+            logger=_LOGGER.debug,
         )
         self._device.get_product_info()
         self._device.get_mac_info()
@@ -98,6 +122,8 @@ class LGDevice(MediaPlayerEntity):
         data = response.get("data") or {}
         if response["msg"] == "EQ_VIEW_INFO":
             self._update_equalisers(data)
+        elif response["msg"] == "DISCONNECTED":
+            self.schedule_update_ha_state()
         elif response["msg"] == "SPK_LIST_VIEW_INFO":
             if "i_vol" in data:
                 self._volume = data["i_vol"]
